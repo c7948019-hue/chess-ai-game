@@ -116,32 +116,37 @@ function pickAIMove(game, difficulty) {
   if (!legalMoves.length) return null;
 
   if (difficulty === 'low') {
-    const tacticalMoves = legalMoves.filter(
-      (move) => move.captured || move.san.includes('+')
-    );
-    if (tacticalMoves.length > 0 && Math.random() < 0.5) {
-      return tacticalMoves[Math.floor(Math.random() * tacticalMoves.length)];
-    }
+  const scoredMoves = legalMoves.map((move) => {
+    const next = cloneGame(game);
+    next.move(move);
 
-    const subset = [...legalMoves]
-      .sort(() => Math.random() - 0.5)
-      .slice(0, Math.min(8, legalMoves.length));
+    let score;
 
-    let bestMove = subset[0];
-    let bestScore = Infinity;
+    // 直接看兩層，但加入一些雜訊，讓它不像中階那麼穩
+    const result = minimax(next, 1, -Infinity, Infinity, true);
+    score = result.score;
 
-    for (const move of subset) {
-      const next = cloneGame(game);
-      next.move(move);
-      const score = evaluateBoard(next);
-      if (score < bestScore) {
-        bestScore = score;
-        bestMove = move;
-      }
-    }
+    // 避免太笨：吃子、將軍、升變給一點獎勵
+    if (move.captured) score -= 90;
+    if (move.san.includes('+')) score -= 70;
+    if (move.promotion) score -= 120;
 
-    return bestMove;
+    // 加入少量隨機，保留低階感
+    score += Math.random() * 120;
+
+    return { move, score };
+  });
+
+  scoredMoves.sort((a, b) => a.score - b.score);
+
+  // 80% 直接走最佳，20% 從前兩名挑一個
+  if (Math.random() < 0.8) {
+    return scoredMoves[0].move;
   }
+
+  const candidatePool = scoredMoves.slice(0, Math.min(2, scoredMoves.length));
+  return candidatePool[Math.floor(Math.random() * candidatePool.length)].move;
+}
 
   if (difficulty === 'medium') {
     return minimax(game, 2, -Infinity, Infinity, false).move;
@@ -155,17 +160,26 @@ function getHintMove(game) {
   return minimax(game, 2, -Infinity, Infinity, true).move;
 }
 
+function getDrawReason(game) {
+  if (game.isStalemate()) return '和棋：Stalemate';
+  if (game.isInsufficientMaterial()) return '和棋：子力不足';
+  if (game.isThreefoldRepetition()) return '和棋：三次重複局面';
+  if (game.isDraw()) return '和棋';
+  return null;
+}
+
 function statusText(game) {
   if (game.isCheckmate()) {
     return game.turn() === 'w' ? '白方被將死，黑方獲勝。' : '黑方被將死，白方獲勝。';
   }
-  if (game.isStalemate()) return '和棋：Stalemate';
-  if (game.isThreefoldRepetition()) return '和棋：三次重複局面';
-  if (game.isInsufficientMaterial()) return '和棋：子力不足';
-  if (game.isDraw()) return '和棋';
+
+  const drawReason = getDrawReason(game);
+  if (drawReason) return drawReason;
+
   if (game.inCheck()) {
     return game.turn() === 'w' ? '警示：白方正在被將軍！' : '警示：黑方正在被將軍！';
   }
+
   return game.turn() === 'w' ? '輪到你（白方）' : '輪到 AI（黑方）';
 }
 
@@ -493,18 +507,21 @@ function startGame() {
     const updatedLog = [...currentMoveLog, aiLogEntry];
 
     setGame(afterAI);
-setMoveLog(updatedLog);
-setLastMoveSquares({ from: appliedAiMove.from, to: appliedAiMove.to });
-setAiThinking(false);
+    setMoveLog(updatedLog);
+    setLastMoveSquares({ from: appliedAiMove.from, to: appliedAiMove.to });
+    setAiThinking(false);
 
     if (afterAI.isCheckmate()) {
       setMessage(`AI 下出 ${appliedAiMove.san}，將死！`);
     } else if (afterAI.inCheck()) {
       setMessage(`AI 下出 ${appliedAiMove.san}，你被將軍了！`);
-    } else if (afterAI.isDraw()) {
-      setMessage(`AI 下出 ${appliedAiMove.san}，本局和棋。`);
     } else {
-      setMessage(`AI 下出 ${appliedAiMove.san}`);
+      const drawReason = getDrawReason(afterAI);
+      if (drawReason) {
+        setMessage(`AI 下出 ${appliedAiMove.san}，${drawReason}。`);
+      } else {
+        setMessage(`AI 下出 ${appliedAiMove.san}`);
+      }
     }
   }, 900);
 }
@@ -596,12 +613,15 @@ setAiThinking(false);
     }
 
     if (next.inCheck()) {
-      setMessage(`你採用了提示步 ${move.san}，AI 被將軍。`);
-    } else if (next.isDraw()) {
-      setMessage(`你採用了提示步 ${move.san}，本局和棋。`);
-    } else {
-      setMessage(`你採用了提示步 ${move.san}`);
-    }
+  setMessage(`你採用了提示步 ${move.san}，AI 被將軍。`);
+} else {
+  const drawReason = getDrawReason(next);
+  if (drawReason) {
+    setMessage(`你採用了提示步 ${move.san}，${drawReason}。`);
+  } else {
+    setMessage(`你採用了提示步 ${move.san}`);
+  }
+}
 
     runAIFromPosition(next, updatedLog);
   }
